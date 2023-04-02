@@ -12,12 +12,28 @@ public class NavigationController : MonoBehaviour
     }
 
     [Header("Navigation")]
-    [SerializeField] private float speed = 1f;
-    [SerializeField] private float speedVariation = .1f;
-    [SerializeField] private float rotationSpeed = 120f;
+    [SerializeField] private float motorForce = 100f;
+    [SerializeField] private float motorForceVariation = 5f;
+    [SerializeField] private float acceleration = 5f;
+    [SerializeField] private float rotationSpeed = 600f;
     [SerializeField] private float stopDistance = 1f;
     [SerializeField] private Waypoint startWaypoint;
     [SerializeField] private bool enableDirection = false;
+    private float currentMotorforce;
+
+    [Header("Crash Handling")]
+    [Tooltip("The car will try to keep a minimum distance from other cars in front of it.")]
+    [SerializeField] private float minimumDistance = 4f;
+
+    [Tooltip("The speed the car will move at when it is too close to another car." +
+        "(If the car in front is slower than this, this value will be adjusted accordingly)")]
+    [SerializeField] private float slowMotorForce = 60f;
+
+    // Spherecast radius when checking for other cars
+    [SerializeField] private float castRadius = 1f;
+
+    [Tooltip("The LayerMask of all the objects the car will try to avoid crashing into.")]
+    [SerializeField] private LayerMask crashMask;
 
     private Waypoint currentWaypoint;
     private Direction direction;
@@ -27,6 +43,8 @@ public class NavigationController : MonoBehaviour
 
     private Rigidbody rb;
 
+    public bool shouldAddForce, crashIncoming;
+
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
@@ -34,7 +52,9 @@ public class NavigationController : MonoBehaviour
 
     private void Start()
     {
-        speed = Random.Range(speed - speedVariation, speed + speedVariation);
+        motorForce = Random.Range(motorForce - motorForceVariation, motorForce + motorForceVariation);
+        currentMotorforce = motorForce;
+
         if (enableDirection)
             direction = (Direction)Mathf.RoundToInt(Random.Range(0f, 1f));
         else
@@ -111,7 +131,31 @@ public class NavigationController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        rb.AddForce(transform.forward * speed);
+        shouldAddForce = true;
+        crashIncoming = false;
+
+        RaycastHit hit;
+        if (Physics.SphereCast(transform.position, castRadius, transform.forward, out hit, minimumDistance, crashMask))
+        {
+            crashIncoming = true;
+            Rigidbody r = hit.collider.gameObject.GetComponent<Rigidbody>();
+            if (r != null && rb.velocity.magnitude > r.velocity.magnitude)
+            {
+                // There is a slower rigidbody in front of this car and it's too close
+                Vector3 diff = rb.velocity - r.velocity;
+                rb.AddForce(-diff * 1.1f); // Slows down with a force greater than the velocity difference
+                shouldAddForce = false;
+            }
+            else
+            {
+                // The car isn't slower but still too close, so we slow down to a safe speed
+                currentMotorforce = Mathf.Lerp(currentMotorforce, slowMotorForce, acceleration);
+            }
+        }
+        else
+            currentMotorforce = Mathf.Lerp(currentMotorforce, motorForce, acceleration);
+
+        if (shouldAddForce) rb.AddForce(transform.forward * motorForce);
     }
 
     private void SetDestination(Vector3 destination)
