@@ -29,13 +29,12 @@ public class NavigationController : MonoBehaviour
         "(If the car in front is slower than this, this value will be adjusted accordingly)")]
     [SerializeField] private float slowMotorForce = 60f;
 
-    // Spherecast radius when checking for other cars
-    [SerializeField] private float castRadius = 1f;
+    [SerializeField] private float brakeMultiplier = 2f;
 
     [Tooltip("The LayerMask of all the objects the car will try to avoid crashing into.")]
     [SerializeField] private LayerMask crashMask;
 
-    private Waypoint currentWaypoint;
+    public Waypoint currentWaypoint;
     private Direction direction;
 
     private bool reachedDestination;
@@ -43,7 +42,7 @@ public class NavigationController : MonoBehaviour
 
     private Rigidbody rb;
 
-    public bool shouldAddForce, crashIncoming;
+    public bool shouldAddForce, shouldIncreaseForce, shouldStop, crashIncoming;
 
     private void Awake()
     {
@@ -61,22 +60,29 @@ public class NavigationController : MonoBehaviour
             direction = Direction.FORWARD;
 
         if (startWaypoint != null)
+        {
             currentWaypoint = startWaypoint;
-
-        if (currentWaypoint != null)
             SetDestination(currentWaypoint.GetPosition());
+        }
     }
 
-    private void Update()
+    private void FixedUpdate()
     {
+        shouldAddForce = true;
+        shouldIncreaseForce = true;
+        crashIncoming = false;
+
+        #region Navigation
+
         reachedDestination = false;
 
+        float distance = 0f;
         if (destination != null && transform.position != destination)
         {
             Vector3 direction = destination - transform.position;
             direction.y = 0;
 
-            float distance = direction.magnitude;
+            distance = direction.magnitude;
             if (distance >= stopDistance)
             {
                 Quaternion targetRot = Quaternion.LookRotation(direction);
@@ -86,57 +92,64 @@ public class NavigationController : MonoBehaviour
             else reachedDestination = true;
         }
 
-        if (reachedDestination)
+        if (reachedDestination && currentWaypoint != null)
         {
-            if (currentWaypoint == null) return;
-
-            bool shouldBranch = false;
-            if (currentWaypoint.branches != null && currentWaypoint.branches.Count > 0)
+            if (currentWaypoint.state == JunctionState.Stop && distance <= stopDistance)
             {
-                if ((direction == Direction.FORWARD && currentWaypoint.next == null) ||
-                    (direction == Direction.BACKWARDS && currentWaypoint.previous == null))
-                    shouldBranch = true;
-                else
-                    shouldBranch = Random.Range(0f, 1f) <= currentWaypoint.branchRatio ? true : false;
+                rb.AddForce(-rb.velocity * brakeMultiplier); // Quickly slow down
+                shouldStop = true;
             }
-            if (shouldBranch)
-                currentWaypoint = currentWaypoint.branches[Random.Range(0, currentWaypoint.branches.Count - 1)];
             else
             {
-                if (direction == Direction.FORWARD)
+                shouldStop = false;
+                bool shouldBranch = false;
+                if (currentWaypoint.branches != null && currentWaypoint.branches.Count > 0)
                 {
-                    if (currentWaypoint.next != null)
-                        currentWaypoint = currentWaypoint.next;
+                    if ((direction == Direction.FORWARD && currentWaypoint.next == null) ||
+                        (direction == Direction.BACKWARDS && currentWaypoint.previous == null))
+                        shouldBranch = true;
                     else
-                    {
-                        currentWaypoint = currentWaypoint.previous;
-                        direction = Direction.BACKWARDS;
-                    }
+                        shouldBranch = Random.Range(0f, 1f) <= currentWaypoint.branchRatio ? true : false;
                 }
+                if (shouldBranch)
+                    currentWaypoint = currentWaypoint.branches[Random.Range(0, currentWaypoint.branches.Count - 1)];
                 else
                 {
-                    if (currentWaypoint.previous != null)
-                        currentWaypoint = currentWaypoint.previous;
+                    if (direction == Direction.FORWARD)
+                    {
+                        if (currentWaypoint.next != null)
+                            currentWaypoint = currentWaypoint.next;
+                        else
+                        {
+                            currentWaypoint = currentWaypoint.previous;
+                            direction = Direction.BACKWARDS;
+                        }
+                    }
                     else
                     {
-                        currentWaypoint = currentWaypoint.next;
-                        direction = Direction.FORWARD;
+                        if (currentWaypoint.previous != null)
+                            currentWaypoint = currentWaypoint.previous;
+                        else
+                        {
+                            currentWaypoint = currentWaypoint.next;
+                            direction = Direction.FORWARD;
+                        }
                     }
                 }
             }
 
             SetDestination(currentWaypoint.GetPosition());
         }
-    }
 
-    private void FixedUpdate()
-    {
-        shouldAddForce = true;
-        crashIncoming = false;
+        #endregion
+        #region Engine, Braking and Crash prevention
 
-        RaycastHit hit;
-        if (Physics.SphereCast(transform.position, castRadius, transform.forward, out hit, minimumDistance, crashMask))
-        {
+        if (shouldStop) return;
+
+        RaycastHit[] hits = Physics.RaycastAll(transform.position, transform.forward, minimumDistance, crashMask);
+        foreach (RaycastHit hit in hits) {
+            if (hit.collider.gameObject.GetComponentInParent<NavigationController>() == this) continue;
+
             crashIncoming = true;
             Rigidbody r = hit.collider.gameObject.GetComponent<Rigidbody>();
             if (r != null && rb.velocity.magnitude > r.velocity.magnitude)
@@ -150,12 +163,14 @@ public class NavigationController : MonoBehaviour
             {
                 // The car isn't slower but still too close, so we slow down to a safe speed
                 currentMotorforce = Mathf.Lerp(currentMotorforce, slowMotorForce, acceleration);
+                shouldIncreaseForce = false;
             }
         }
-        else
-            currentMotorforce = Mathf.Lerp(currentMotorforce, motorForce, acceleration);
 
-        if (shouldAddForce) rb.AddForce(transform.forward * motorForce);
+        if (shouldIncreaseForce) currentMotorforce = Mathf.Lerp(currentMotorforce, motorForce, acceleration);
+        if (shouldAddForce) rb.AddForce(transform.forward * currentMotorforce);
+
+        #endregion
     }
 
     private void SetDestination(Vector3 destination)
