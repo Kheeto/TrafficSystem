@@ -12,6 +12,7 @@ public class ObjectSpawner : MonoBehaviour
 
     void Start()
     {
+        Random.InitState(System.DateTime.Now.Millisecond);
         StartCoroutine(Spawn());
     }
 
@@ -20,9 +21,10 @@ public class ObjectSpawner : MonoBehaviour
         for (int i = 0; i < spawnAmount; i++)
         {
             GameObject obj = Instantiate(prefab);
-            Transform child = transform.GetChild(Random.Range(0, transform.childCount - 1));
+            Transform child = transform.GetChild(Random.Range(0, transform.childCount));
             obj.GetComponent<NavigationController>().SetCurrentWaypoint(child.GetComponent<Waypoint>());
-            obj.transform.position = child.position;
+            obj.GetComponent<Rigidbody>().position = child.position;
+            obj.GetComponent<Rigidbody>().rotation = Quaternion.LookRotation(child.forward);
 
             yield return new WaitForEndOfFrame();
         }
